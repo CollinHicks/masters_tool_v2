@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Athlete Injury Explorer</title>
+<style>
+[hidden]{display:none!important}
+body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#f3f4f6;color:#1f2328;margin:0}
+main{max-width:1320px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;margin:0 0 16px}
+h2{font-size:15px;margin:0 0 10px}
+section,details.sec,aside{background:#fff;border:1px solid #d5d9de;border-radius:4px;padding:14px 16px;margin-bottom:14px}
+details.sec>summary{font-size:15px;font-weight:600;cursor:pointer}
+details.sec>.body{margin-top:10px}
+select,input[type=number],input[type=search],button,summary.ms{font:inherit;padding:6px 8px;border:1px solid #aab0b8;border-radius:4px;background:#fff;color:inherit}
+button{cursor:pointer}
+button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid #1a56c4;outline-offset:1px}
+.frow,.opts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.frow{margin-bottom:8px}
+.opts{gap:16px;align-items:flex-end}
+label,.fld{display:flex;flex-direction:column;gap:3px;font-size:13px;color:#4a5159}
+label.check{flex-direction:row;align-items:center;gap:6px;font-size:15px;color:inherit;padding-bottom:7px}
+#none{margin:0 0 8px;color:#4a5159}
+#chartwrap{position:relative;height:460px}
+.layout{display:flex;gap:16px;align-items:flex-start}
+.col{flex:1;min-width:0}
+aside{width:320px;flex:none;position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto;box-sizing:border-box;margin-bottom:0}
+aside h2{margin-bottom:4px}
+aside p{margin:0 0 8px;font-size:13px;color:#4a5159}
+aside input[type=search]{width:100%;box-sizing:border-box;margin-bottom:8px}
+#legend details{border-top:1px solid #e6e8eb;padding:6px 0 6px 8px;border-left:3px solid transparent}
+#legend details.used{border-left-color:#2f6fdb}
+#legend summary{cursor:pointer}
+#legend details.used>summary{font-weight:600}
+#legend small{display:block;color:#6a717a;font-size:12px;font-weight:400}
+#legend .desc{font-size:13px;color:#2f353b;padding:6px 0 2px}
+details.multi{position:relative}
+summary.ms{list-style:none;cursor:pointer;min-width:150px;padding-right:24px;position:relative;white-space:nowrap}
+summary.ms::-webkit-details-marker{display:none}
+summary.ms::after{content:"▾";position:absolute;right:8px;color:#6a717a}
+.mbody{position:absolute;z-index:10;top:100%;left:0;margin-top:2px;min-width:100%;width:max-content;max-width:320px;max-height:280px;overflow:auto;background:#fff;border:1px solid #aab0b8;border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,.15);box-sizing:border-box}
+.mtools{display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid #e6e8eb;position:sticky;top:0;background:#fff}
+.mtools button{padding:2px 8px;font-size:13px}
+label.opt{flex-direction:row;align-items:center;gap:6px;font-size:14px;color:inherit;padding:4px 8px;cursor:pointer}
+@media(max-width:900px){.layout{flex-direction:column}aside{width:100%;position:static;max-height:none}}
+</style>
+</head>
+<body>
+<main>
+<h1>Athlete Injury Explorer</h1>
+<p id="status">Loading data…</p>
+<section id="loader" hidden>
+<p>The data file could not be loaded automatically. Select the spreadsheet (.xlsx) to continue.</p>
+<input type="file" id="file" accept=".xlsx,.xls">
+</section>
+<div id="app" class="layout" hidden>
+<div class="col">
+<section>
+<h2>Filter</h2>
+<p id="none">No filters. All athletes are included.</p>
+<div id="filters"></div>
+<button id="add">+ Add filter</button>
+</section>
+<details class="sec" open>
+<summary>Group by<span id="gsum"></span></summary>
+<div class="body opts">
+<label>Group by<select id="group"></select></label>
+<div class="fld" id="gshowL"><span>Groups to show</span><span id="gshow"></span></div>
+</div>
+</details>
+<section>
+<h2>Chart</h2>
+<div class="opts">
+<label>Show<select id="measure"></select></label>
+<label>Chart type
+<select id="type">
+<option value="bar">Bar (vertical)</option>
+<option value="hbar">Bar (horizontal)</option>
+<option value="line">Line</option>
+<option value="pie">Pie</option>
+<option value="doughnut">Doughnut</option>
+</select>
+</label>
+<label class="check"><input type="checkbox" id="sort">Largest first</label>
+</div>
+</section>
+<section>
+<p id="empty" hidden></p>
+<div id="chartwrap"><canvas id="chart"></canvas></div>
+</section>
+</div>
+<aside>
+<h2>Variable guide</h2>
+<p>Descriptions are inferred from the column names. Variables you are using are highlighted.</p>
+<input type="search" id="q" placeholder="Search variables">
+<div id="legend"></div>
+</aside>
+</div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+<script>
+const DATA_FILE='collegiate_athlete_injury_dataset.xlsx';
+const INJ='Injury_Indicator';
+const NAMES={
+  Height_cm:'Height (cm)',
+  Weight_kg:'Weight (kg)',
+  Rest_Between_Events_Days:'Rest days between events',
+  ACL_Risk_Score:'ACL risk score',
+  Injury_Indicator:'Injury status'
+};
+const DESC={
+  Age:'Athlete age in years.',
+  Gender:'Athlete gender.',
+  Height_cm:'Height in centimeters.',
+  Weight_kg:'Weight in kilograms.',
+  Position:'Playing position (Guard, Forward or Center).',
+  Training_Intensity:'Training intensity rating. Higher = harder.',
+  Training_Hours_Per_Week:'Hours of training per week.',
+  Recovery_Days_Per_Week:'Recovery days per week.',
+  Match_Count_Per_Week:'Matches played per week.',
+  Rest_Between_Events_Days:'Days of rest between matches or events.',
+  Fatigue_Score:'Fatigue rating. Higher = more fatigued.',
+  Performance_Score:'Overall performance rating. Higher = better.',
+  Team_Contribution_Score:'Contribution to the team. Higher = more.',
+  Load_Balance_Score:'How evenly training load is balanced.',
+  ACL_Risk_Score:'Estimated ACL injury risk. Higher = riskier.',
+  Injury_Indicator:'Whether the athlete was injured.'
+};
+const LABELS={Injury_Indicator:{'0':'Not injured','1':'Injured'}};
+const PALETTE=['#2f6fdb','#e8743b','#19a979','#945ecf','#13a4b4','#c94f7c','#8c8c8c','#d6b400','#5a6ee0','#b5651d','#3aa655','#e04b4b','#7d6b5a','#4aa3df'];
+const OPS_CAT=[['in','is one of'],['out','is not one of']];
+const OPS_NUM=[['=','equal to'],['>','greater than'],['>=','greater than or equal to'],['<','less than'],['<=','less than or equal to']];
+const SYM={'=':'=','>':'>','>=':'≥','<':'<','<=':'≤'};
+
+let rows=[],V={},MEAS={},filters=[],chart=null,gsel=new Set(),usedKey='';
+const $=id=>document.getElementById(id);
+const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
+const lcFirst=s=>s.replace(/^([A-Z])([a-z])/,(m,a,b)=>a.toLowerCase()+b);
+const fmt=v=>(Math.round(v*10)/10).toLocaleString();
+const pretty=n=>cap(n.replace(/_/g,' ').toLowerCase());
+
+function gkey(vr,v){
+  if(v===null||v===undefined||v==='')return '';
+  if(vr.bin){const b=vr.bin;return String(b.start+Math.floor((v-b.start)/b.width)*b.width);}
+  return String(v);
+}
+
+function show(vr,k){
+  if(k==='')return '(blank)';
+  if(vr.labels[k]!==undefined)return vr.labels[k];
+  if(vr.bin){
+    const lo=Number(k),hi=Math.min(lo+vr.bin.width-(vr.bin.int?1:0),vr.max);
+    return lo===hi?String(lo):`${lo}–${hi}`;
+  }
+  return k;
+}
+
+function buildVar(name){
+  const raw=rows.map(r=>r[name]);
+  const nn=raw.filter(v=>v!==null&&v!=='');
+  const labels=LABELS[name]||{};
+  const numeric=nn.length>0&&nn.every(v=>typeof v==='number')&&!Object.keys(labels).length;
+  const vr={name,label:NAMES[name]||pretty(name),desc:DESC[name]||'',numeric,labels,bin:null,min:0,max:0};
+  if(numeric){
+    vr.min=Math.min(...nn);
+    vr.max=Math.max(...nn);
+    if(new Set(nn).size>15){
+      const want=(vr.max-vr.min)/10;
+      const width=[1,2,5,10,20,25,50,100,200,500,1000].find(w=>w>=want)||want;
+      vr.bin={start:Math.floor(vr.min/width)*width,width,int:nn.every(Number.isInteger)};
+    }
+  }
+  let keys;
+  if(vr.bin){
+    keys=[];
+    for(let s=vr.bin.start;s<=vr.max;s+=vr.bin.width)keys.push(String(s));
+    if(raw.some(v=>v===null||v===''))keys.push('');
+  }else{
+    keys=[...new Set(raw.map(v=>gkey(vr,v)))].sort((a,b)=>{
+      if(a==='')return 1;
+      if(b==='')return -1;
+      const x=Number(a),y=Number(b);
+      return isNaN(x)||isNaN(y)?a.localeCompare(b):x-y;
+    });
+  }
+  vr.keys=keys;
+  return vr;
+}
+
+function init(buf){
+  const wb=XLSX.read(buf,{type:'array'});
+  rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:null});
+  if(!rows.length)throw new Error('The data sheet is empty.');
+  V={};
+  Object.keys(rows[0]).forEach(c=>{
+    const vals=rows.map(r=>r[c]);
+    if(vals.some(v=>typeof v==='string')&&new Set(vals).size===rows.length)return;
+    V[c]=buildVar(c);
+  });
+  filters=[];
+  fill($('group'),[['none','None']].concat(varOpts()),V.Position?'Position':'none');
+
+  MEAS={count:'Number of athletes'};
+  if(V[INJ]){MEAS.inj='Number of injuries';MEAS.rate='Injury rate (%)';}
+  const ms=$('measure');
+  ms.innerHTML='';
+  Object.entries(MEAS).forEach(([v,t])=>ms.append(new Option(t,v)));
+  const og=document.createElement('optgroup');
+  og.label='Average of…';
+  Object.values(V).filter(v=>v.numeric).forEach(v=>{
+    MEAS['avg:'+v.name]='Average '+lcFirst(v.label);
+    og.append(new Option(v.label,'avg:'+v.name));
+  });
+  ms.append(og);
+  ms.value=V[INJ]?'rate':'count';
+
+  buildLegend();
+  renderGroupSel();
+  renderFilters();
+  $('status').hidden=true;
+  $('loader').hidden=true;
+  $('app').hidden=false;
+  draw();
+}
+
+function varOpts(){
+  return Object.values(V).sort((a,b)=>a.label.localeCompare(b.label)).map(v=>[v.name,v.label]);
+}
+
+function fill(s,opts,val){
+  s.innerHTML='';
+  opts.forEach(([v,t])=>s.append(new Option(t,v)));
+  s.value=val;
+}
+
+function sel(opts,val,fn){
+  const s=document.createElement('select');
+  fill(s,opts,val);
+  s.onchange=()=>fn(s.value);
+  return s;
+}
+
+function multi(keys,labelFn,selected,onChange,emptyText,allText){
+  const d=document.createElement('details');
+  d.className='multi';
+  const s=document.createElement('summary');
+  s.className='ms';
+  const body=document.createElement('div');
+  body.className='mbody';
+  const tools=document.createElement('div');
+  tools.className='mtools';
+  const boxes=[];
+  const upd=()=>{
+    const n=selected.size;
+    s.textContent=n===0?emptyText:(allText&&n===keys.length)?allText:n<=2?keys.filter(k=>selected.has(k)).map(labelFn).join(', '):n+' selected';
+  };
+  const setAll=on=>{
+    selected.clear();
+    if(on)keys.forEach(k=>selected.add(k));
+    boxes.forEach(b=>{b.checked=on;});
+    upd();
+    onChange();
+  };
+  [['All',true],['Clear',false]].forEach(([t,on])=>{
+    const b=document.createElement('button');
+    b.type='button';
+    b.textContent=t;
+    b.onclick=()=>setAll(on);
+    tools.append(b);
+  });
+  body.append(tools);
+  keys.forEach(k=>{
+    const l=document.createElement('label');
+    l.className='opt';
+    const c=document.createElement('input');
+    c.type='checkbox';
+    c.checked=selected.has(k);
+    c.onchange=()=>{if(c.checked)selected.add(k);else selected.delete(k);upd();onChange();};
+    boxes.push(c);
+    l.append(c,document.createTextNode(labelFn(k)));
+    body.append(l);
+  });
+  d.append(s,body);
+  upd();
+  return d;
+}
+
+function newFilter(name){
+  const vr=V[name];
+  return vr.numeric?{v:name,op:'>=',val:String(vr.min)}:{v:name,op:'in',sel:new Set()};
+}
+
+function renderFilters(){
+  const box=$('filters');
+  box.innerHTML='';
+  $('none').hidden=filters.length>0;
+  filters.forEach((f,i)=>{
+    const vr=V[f.v];
+    const row=document.createElement('div');
+    row.className='frow';
+    row.append(sel(varOpts(),f.v,x=>{filters[i]=newFilter(x);renderFilters();draw();}));
+    row.append(sel(vr.numeric?OPS_NUM:OPS_CAT,f.op,x=>{f.op=x;draw();}));
+    if(vr.numeric){
+      const inp=document.createElement('input');
+      inp.type='number';
+      inp.value=f.val;
+      inp.oninput=()=>{f.val=inp.value;draw();};
+      row.append(inp);
+    }else{
+      row.append(multi(vr.keys,k=>show(vr,k),f.sel,draw,'Select values…'));
+    }
+    const b=document.createElement('button');
+    b.textContent='Remove';
+    b.onclick=()=>{filters.splice(i,1);renderFilters();draw();};
+    row.append(b);
+    box.append(row);
+  });
+}
+
+function renderGroupSel(){
+  const box=$('gshow');
+  box.innerHTML='';
+  const gv=$('group').value;
+  $('gshowL').hidden=gv==='none';
+  if(gv==='none')return;
+  const g=V[gv];
+  gsel=new Set(g.keys);
+  box.append(multi(g.keys,k=>show(g,k),gsel,draw,'None selected','All'));
+}
+
+function buildLegend(){
+  const box=$('legend');
+  box.innerHTML='';
+  varOpts().forEach(([n])=>{
+    const v=V[n];
+    const d=document.createElement('details');
+    d.dataset.var=n;
+    d.dataset.text=(v.label+' '+n+' '+v.desc).toLowerCase();
+    const s=document.createElement('summary');
+    s.textContent=v.label;
+    const sm=document.createElement('small');
+    sm.textContent=n;
+    s.append(sm);
+    const body=document.createElement('div');
+    body.className='desc';
+    const a=document.createElement('div');
+    a.textContent=v.desc||'No description.';
+    body.append(a);
+    const r=document.createElement('div');
+    r.textContent=v.numeric?`Range: ${v.min}–${v.max}`:'Values: '+v.keys.map(k=>show(v,k)).join(', ');
+    body.append(r);
+    d.append(s,body);
+    box.append(d);
+  });
+  usedKey='';
+}
+
+function markUsed(){
+  const used=new Set(filters.map(f=>f.v));
+  if($('group').value!=='none')used.add($('group').value);
+  const k=[...used].sort().join('|');
+  if(k===usedKey)return;
+  usedKey=k;
+  document.querySelectorAll('#legend details').forEach(d=>{
+    const u=used.has(d.dataset.var);
+    d.classList.toggle('used',u);
+    if(u)d.open=true;
+  });
+}
+
+function isActive(f){
+  return V[f.v].numeric?f.val!==''&&!isNaN(Number(f.val)):f.sel.size>0;
+}
+
+function pass(r){
+  return filters.every(f=>{
+    if(!isActive(f))return true;
+    const vr=V[f.v],raw=r[f.v];
+    if(vr.numeric){
+      if(raw===null||raw==='')return false;
+      const x=Number(f.val);
+      return f.op==='='?raw===x:f.op==='>'?raw>x:f.op==='>='?raw>=x:f.op==='<'?raw<x:raw<=x;
+    }
+    return f.sel.has(gkey(vr,raw))===(f.op==='in');
+  });
+}
+
+function describe(f){
+  const vr=V[f.v];
+  if(vr.numeric)return `${vr.label} ${SYM[f.op]} ${f.val}`;
+  const ks=vr.keys.filter(k=>f.sel.has(k));
+  const t=ks.length>4?ks.length+' selected values':ks.map(k=>show(vr,k)).join(' or ');
+  return `${vr.label} ${f.op==='in'?'is':'is not'} ${t}`;
+}
+
+const valueLabels={
+  id:'valueLabels',
+  afterDatasetsDraw(c){
+    if(c.config.type==='pie'||c.config.type==='doughnut')return;
+    const ctx=c.ctx,ds=c.data.datasets[0],horiz=c.options.indexAxis==='y',suf=ds.suffix||'';
+    ctx.save();
+    ctx.fillStyle='#1f2328';
+    ctx.font='12px system-ui,sans-serif';
+    c.getDatasetMeta(0).data.forEach((el,i)=>{
+      const v=ds.data[i];
+      if(v===null)return;
+      if(horiz){ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(fmt(v)+suf,el.x+5,el.y);}
+      else{ctx.textAlign='center';ctx.textBaseline='bottom';ctx.fillText(fmt(v)+suf,el.x,el.y-5);}
+    });
+    ctx.restore();
+  }
+};
+
+function draw(){
+  if(chart){chart.destroy();chart=null;}
+  markUsed();
+  const gv=$('group').value,g=gv==='none'?null:V[gv];
+  $('gsum').textContent=': '+(g?g.label:'None');
+  const mv=$('measure').value,type=$('type').value;
+  const [fn,col]=mv.split(':');
+  const rec=rows.filter(pass);
+  const pie=type==='pie'||type==='doughnut';
+  const suf=fn==='rate'?'%':'';
+
+  const agg=new Map((g?g.keys:['all']).map(k=>[k,{n:0,inj:0,s:0,c:0}]));
+  rec.forEach(r=>{
+    const a=agg.get(g?gkey(g,r[g.name]):'all');
+    a.n++;
+    if(V[INJ]&&r[INJ]===1)a.inj++;
+    if(col&&typeof r[col]==='number'){a.s+=r[col];a.c++;}
+  });
+  let items=[...agg].map(([k,a])=>({
+    k,n:a.n,inj:a.inj,
+    v:fn==='count'?a.n:fn==='inj'?a.inj:fn==='rate'?(a.n?a.inj/a.n*100:null):(a.c?a.s/a.c:null)
+  }));
+  if(g){
+    const partial=gsel.size<g.keys.length;
+    items=items.filter(i=>gsel.has(i.k)&&(i.n>0||(!pie&&i.k!==''&&(partial||g.keys.length<=15))));
+  }else items=items.filter(i=>i.n>0);
+  if(pie)items=items.filter(i=>i.v);
+  if($('sort').checked)items.sort((a,b)=>(b.v===null?-Infinity:b.v)-(a.v===null?-Infinity:a.v));
+
+  $('chartwrap').hidden=!items.length;
+  $('empty').hidden=items.length>0;
+  if(!items.length){
+    $('empty').textContent=rec.length?'No groups selected.':'No athletes match these filters.';
+    return;
+  }
+
+  const mlabel=MEAS[mv];
+  let labels=items.map(i=>g?show(g,i.k):'All matching athletes');
+  const data=items.map(i=>i.v===null?null:Math.round(i.v*10)/10);
+  if(pie){
+    const total=data.reduce((a,b)=>a+b,0);
+    labels=labels.map((l,i)=>`${l}: ${fmt(data[i])}${suf} (${Math.round(data[i]/total*100)}%)`);
+  }
+
+  const act=filters.filter(isActive);
+  const sub=act.length?act.map((f,i)=>(i?'and ':'Where ')+describe(f)):['All athletes'];
+  if(g&&gsel.size<g.keys.length){
+    const nm=g.keys.filter(k=>gsel.has(k)).map(k=>show(g,k));
+    sub.push(nm.length<=4?'Groups shown: '+nm.join(', '):`Groups shown: ${nm.length} of ${g.keys.length}`);
+  }
+  const tn=items.reduce((a,i)=>a+i.n,0),ti=items.reduce((a,i)=>a+i.inj,0);
+  sub.push(`n = ${tn} athletes`+(V[INJ]?` (${ti} injured)`:''));
+
+  const horiz=type==='hbar';
+  const t=horiz?'bar':type;
+  const cat=horiz?'y':'x',val=horiz?'x':'y';
+  $('chartwrap').style.height=(horiz?Math.max(460,items.length*26+130):460)+'px';
+
+  const scales={};
+  if(!pie){
+    if(g)scales[cat]={title:{display:true,text:g.label}};
+    scales[val]={beginAtZero:true,title:{display:true,text:mlabel},ticks:fn==='count'||fn==='inj'?{precision:0}:{}};
+  }
+  chart=new Chart($('chart'),{
+    type:t,
+    data:{labels,datasets:[{
+      label:mlabel,
+      data,
+      suffix:suf,
+      backgroundColor:pie?items.map((_,i)=>PALETTE[i%PALETTE.length]):PALETTE[0],
+      borderColor:pie?'#fff':PALETTE[0],
+      borderWidth:pie?1:2,
+      tension:0,
+      pointRadius:4
+    }]},
+    options:{
+      indexAxis:horiz?'y':'x',
+      responsive:true,
+      maintainAspectRatio:false,
+      animation:false,
+      layout:{padding:{top:pie?0:22,right:pie?0:36}},
+      plugins:{
+        legend:{display:pie,position:'right',labels:{font:{size:13}}},
+        title:{display:true,text:g?`${mlabel} by ${lcFirst(g.label)}`:mlabel,font:{size:17}},
+        subtitle:{display:true,text:sub,font:{size:12},padding:{bottom:12}},
+        tooltip:{enabled:true}
+      },
+      scales
+    },
+    plugins:[valueLabels]
+  });
+}
+
+['measure','type','sort'].forEach(id=>$(id).addEventListener('change',draw));
+$('group').addEventListener('change',()=>{renderGroupSel();draw();});
+$('add').onclick=()=>{
+  filters.push(newFilter(V[INJ]?INJ:varOpts()[0][0]));
+  renderFilters();
+  draw();
+};
+$('q').oninput=()=>{
+  const q=$('q').value.trim().toLowerCase();
+  document.querySelectorAll('#legend details').forEach(d=>{d.hidden=q!==''&&!d.dataset.text.includes(q);});
+};
+document.addEventListener('click',e=>{
+  document.querySelectorAll('details.multi[open]').forEach(d=>{if(!d.contains(e.target))d.open=false;});
+});
+
+function fail(e){
+  $('status').hidden=false;
+  $('status').textContent='Could not load the data: '+e.message;
+}
+$('file').onchange=e=>{
+  const f=e.target.files[0];
+  if(!f)return;
+  f.arrayBuffer().then(b=>{try{init(b);}catch(err){fail(err);}});
+};
+if(typeof XLSX==='undefined'||typeof Chart==='undefined'){
+  fail(new Error('required libraries did not load. Check your internet connection.'));
+}else{
+  fetch(encodeURI(DATA_FILE))
+    .then(r=>{if(!r.ok)throw new Error('missing');return r.arrayBuffer();})
+    .then(b=>{try{init(b);}catch(err){fail(err);}},()=>{$('status').hidden=true;$('loader').hidden=false;});
+}
+</script>
+</body>
+</html>
